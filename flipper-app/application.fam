@@ -1,0 +1,21 @@
+App(
+    appid="ai_chat",
+    name="AI Chat",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="ai_chat_app",
+    cdefines=["APP_AI_CHAT"],
+    requires=["gui"],
+    stack_size=3 * 1024,
+    fap_category="Tools",
+    fap_version="1.0",
+    fap_icon="icons/ai_chat_10px.png",
+    fap_icon_assets="icons",
+    fap_author="Rayla / Blaze Industries",
+    fap_description="Chat with a local LLM (LM Studio) over the WiFi Devboard + Tailscale bridge",
+    sources=[
+        "ai_chat.c",
+        "ai_chat_uart.c",
+        "ai_chat_protocol.c",
+        "ai_chat_chat_view.c",
+    ],
+)
