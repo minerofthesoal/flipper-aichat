@@ -18,12 +18,14 @@ typedef struct {
 
     FuriString* status;
     FuriString* model_name;
-} ChatViewModel;
 
-typedef struct {
+    // Event callback lives in the model (not a separate context struct) so
+    // that the input callback can reach it via with_view_model. The SDK's
+    // View API only exposes view_set_context(), there's no getter, so we
+    // avoid needing one by using the View* itself as its own context.
     AiChatChatViewEventCallback callback;
     void* callback_context;
-} ChatViewContext;
+} ChatViewModel;
 
 static void chat_view_push_line(ChatViewModel* model, const char* text) {
     if(model->line_count == MAX_HISTORY_LINES) {
@@ -100,16 +102,37 @@ static void chat_view_draw_callback(Canvas* canvas, void* model_ptr) {
 }
 
 static bool chat_view_input_callback(InputEvent* event, void* context) {
+    // We set the View* itself as its own context (see alloc below), so
+    // `context` here IS the View* - no view_get_context() call needed.
     View* view = context;
-    ChatViewContext* ctx = view_get_context(view);
     bool consumed = false;
 
     if(event->type == InputTypeShort || event->type == InputTypeRepeat) {
         if(event->key == InputKeyOk) {
-            if(ctx->callback) ctx->callback(AiChatEventOpenKeyboard, ctx->callback_context);
+            AiChatChatViewEventCallback callback = NULL;
+            void* callback_context = NULL;
+            with_view_model(
+                view,
+                ChatViewModel * model,
+                {
+                    callback = model->callback;
+                    callback_context = model->callback_context;
+                },
+                false);
+            if(callback) callback(AiChatEventOpenKeyboard, callback_context);
             consumed = true;
         } else if(event->key == InputKeyLeft) {
-            if(ctx->callback) ctx->callback(AiChatEventOpenModelSelect, ctx->callback_context);
+            AiChatChatViewEventCallback callback = NULL;
+            void* callback_context = NULL;
+            with_view_model(
+                view,
+                ChatViewModel * model,
+                {
+                    callback = model->callback;
+                    callback_context = model->callback_context;
+                },
+                false);
+            if(callback) callback(AiChatEventOpenModelSelect, callback_context);
             consumed = true;
         } else if(event->key == InputKeyUp) {
             with_view_model(
@@ -125,7 +148,17 @@ static bool chat_view_input_callback(InputEvent* event, void* context) {
                 true);
             consumed = true;
         } else if(event->key == InputKeyBack) {
-            if(ctx->callback) ctx->callback(AiChatEventExit, ctx->callback_context);
+            AiChatChatViewEventCallback callback = NULL;
+            void* callback_context = NULL;
+            with_view_model(
+                view,
+                ChatViewModel * model,
+                {
+                    callback = model->callback;
+                    callback_context = model->callback_context;
+                },
+                false);
+            if(callback) callback(AiChatEventExit, callback_context);
             consumed = true;
         }
     }
@@ -146,13 +179,16 @@ View* ai_chat_chat_view_alloc(void) {
             model->stream_buf = furi_string_alloc();
             model->status = furi_string_alloc_set("connecting...");
             model->model_name = furi_string_alloc_set("AI Chat");
+            model->callback = NULL;
+            model->callback_context = NULL;
         },
         true);
 
-    ChatViewContext* ctx = malloc(sizeof(ChatViewContext));
-    ctx->callback = NULL;
-    ctx->callback_context = NULL;
-    view_set_context(view, ctx);
+    // The SDK doesn't expose a view_get_context() getter, only the setter.
+    // Rather than malloc a side struct we'd have no way to retrieve later,
+    // use the View* itself as its own context - input_callback gets it back
+    // for free as its `context` argument.
+    view_set_context(view, view);
 
     view_set_draw_callback(view, chat_view_draw_callback);
     view_set_input_callback(view, chat_view_input_callback);
@@ -171,7 +207,6 @@ void ai_chat_chat_view_free(View* view) {
             furi_string_free(model->model_name);
         },
         false);
-    free(view_get_context(view));
     view_free(view);
 }
 
@@ -179,9 +214,14 @@ void ai_chat_chat_view_set_event_callback(
     View* view,
     AiChatChatViewEventCallback callback,
     void* context) {
-    ChatViewContext* ctx = view_get_context(view);
-    ctx->callback = callback;
-    ctx->callback_context = context;
+    with_view_model(
+        view,
+        ChatViewModel * model,
+        {
+            model->callback = callback;
+            model->callback_context = context;
+        },
+        false);
 }
 
 void ai_chat_chat_view_add_line(View* view, const char* text) {
