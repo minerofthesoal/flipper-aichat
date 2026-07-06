@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  test-python:
+    name: Test - Linux TUI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package + test deps
+        run: |
+          cd linux-tui
+          pip install .
+          pip install pytest
+      - name: Run tests
+        run: |
+          cd linux-tui
+          pytest -v
+
+  build-flipper:
+    name: Build - Flipper app (.fap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ufbt
+        run: pip install ufbt
+      - name: Build fap
+        run: |
+          cd flipper-app
+          ufbt update
+          ufbt build
+      - name: Locate built fap
+        id: find_fap
+        run: |
+          FAP_PATH=$(find flipper-app/dist -name "*.fap" | head -n1)
+          echo "path=$FAP_PATH" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flipper-fap
+          path: ${{ steps.find_fap.outputs.path }}
+
+  build-esp32:
+    name: Build - ESP32 devboard firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build firmware
+        run: |
+          cd esp32-bridge
+          pio run
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware
+          path: esp32-bridge/.pio/build/esp32-s2-devboard/firmware.bin
+
+  release:
+    name: Create GitHub Release
+    needs: [test-python, build-flipper, build-esp32]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: flipper-fap
+          path: release/flipper
+      - uses: actions/download-artifact@v4
+        with:
+          name: esp32-firmware
+          path: release/esp32
+      - name: Package Linux TUI source
+        run: |
+          tar -czf release/ai-chat-tui-src.tar.gz linux-tui
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/flipper/*.fap
+            release/esp32/firmware.bin
+            release/ai-chat-tui-src.tar.gz
+          generate_release_notes: true

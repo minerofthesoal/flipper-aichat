@@ -1,0 +1,20 @@
+# Flipper / ufbt
+flipper-app/dist/
+flipper-app/.ufbt/
+flipper-app/build/
+
+# PlatformIO
+esp32-bridge/.pio/
+esp32-bridge/.pioenvs/
+
+# Python
+linux-tui/__pycache__/
+linux-tui/**/__pycache__/
+linux-tui/*.egg-info/
+linux-tui/.pytest_cache/
+linux-tui/dist/
+linux-tui/build/
+.venv/
+
+# OS cruft
+.DS_Store
