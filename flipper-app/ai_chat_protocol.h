@@ -37,6 +37,11 @@ FuriString* ai_chat_protocol_build_chat(const char* text);
 // Builds "SELMODEL|<name>"
 FuriString* ai_chat_protocol_build_select_model(const char* name);
 
+// Builds "SETSERVER|<url>" (e.g. "SETSERVER|http://100.x.y.z:1234" for a
+// Tailscale tailnet IP, or a MagicDNS name like
+// "SETSERVER|http://my-pc.tailXXXX.ts.net:1234")
+FuriString* ai_chat_protocol_build_set_server(const char* url);
+
 #ifdef __cplusplus
 }
 #endif

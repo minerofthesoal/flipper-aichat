@@ -4,6 +4,7 @@
 #include <gui/modules/text_input.h>
 #include <gui/modules/submenu.h>
 #include <notification/notification_messages.h>
+#include <storage/storage.h>
 
 #include "ai_chat_uart.h"
 #include "ai_chat_protocol.h"
@@ -12,12 +13,21 @@
 #define TAG "AiChat"
 #define MAX_INPUT_LEN 240
 #define MAX_MODELS 16
+#define SERVER_URL_MAX_LEN 96
+#define SERVER_URL_FILE APP_DATA_PATH("server_url.txt")
 
 typedef enum {
     AiChatViewChat,
     AiChatViewKeyboard,
     AiChatViewModelSelect,
+    AiChatViewSettings,
+    AiChatViewServerInput,
 } AiChatViewId;
+
+typedef enum {
+    AiChatSettingsServerUrl,
+    AiChatSettingsRescanModels,
+} AiChatSettingsItem;
 
 typedef struct {
     Gui* gui;
@@ -27,10 +37,14 @@ typedef struct {
     View* chat_view;
     TextInput* text_input;
     Submenu* model_submenu;
+    Submenu* settings_submenu;
+    TextInput* server_input;
 
     AiChatUart* uart;
 
     char input_buffer[MAX_INPUT_LEN];
+    char server_url[SERVER_URL_MAX_LEN];
+    char server_input_buffer[SERVER_URL_MAX_LEN];
 
     FuriMutex* models_mutex;
     FuriString* models_csv; // last "MODELS|..." payload, comma separated
@@ -38,6 +52,39 @@ typedef struct {
 
     bool running;
 } AiChatApp;
+
+// ---- Server URL persistence ------------------------------------------------
+// Stored on the Flipper's own storage (not just the ESP32's NVS) purely so
+// the settings screen can pre-fill the text box with whatever was last set,
+// without needing a round trip over UART just to ask the bridge.
+
+static void ai_chat_load_server_url(AiChatApp* app) {
+    app->server_url[0] = '\0';
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    File* file = storage_file_alloc(storage);
+    if(storage_file_open(file, SERVER_URL_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        size_t len = storage_file_read(file, app->server_url, SERVER_URL_MAX_LEN - 1);
+        app->server_url[len] = '\0';
+        while(len > 0 &&
+              (app->server_url[len - 1] == '\n' || app->server_url[len - 1] == '\r')) {
+            app->server_url[--len] = '\0';
+        }
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
+static void ai_chat_save_server_url(AiChatApp* app) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    File* file = storage_file_alloc(storage);
+    if(storage_file_open(file, SERVER_URL_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+        storage_file_write(file, app->server_url, strlen(app->server_url));
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
 
 // ---- UART line handling (runs on the AiChatUart worker thread) ----------
 
@@ -184,6 +231,76 @@ static void ai_chat_open_model_select(AiChatApp* app) {
     view_dispatcher_switch_to_view(app->view_dispatcher, AiChatViewModelSelect);
 }
 
+static uint32_t ai_chat_exit_to_settings(void* context) {
+    UNUSED(context);
+    return AiChatViewSettings;
+}
+
+static void ai_chat_server_input_result(void* context) {
+    AiChatApp* app = context;
+
+    if(strlen(app->server_input_buffer) > 0) {
+        strncpy(app->server_url, app->server_input_buffer, SERVER_URL_MAX_LEN - 1);
+        app->server_url[SERVER_URL_MAX_LEN - 1] = '\0';
+        ai_chat_save_server_url(app);
+
+        FuriString* wire = ai_chat_protocol_build_set_server(app->server_url);
+        ai_chat_uart_send_line(app->uart, furi_string_get_cstr(wire));
+        furi_string_free(wire);
+
+        FuriString* line = furi_string_alloc();
+        furi_string_printf(line, "(server set to %s)", app->server_url);
+        ai_chat_chat_view_add_line(app->chat_view, furi_string_get_cstr(line));
+        furi_string_free(line);
+
+        // The bridge doesn't know its own models until asked, and switching
+        // server almost always means switching model host, so refresh.
+        ai_chat_uart_send_line(app->uart, "LISTMODELS");
+    }
+
+    view_dispatcher_switch_to_view(app->view_dispatcher, AiChatViewChat);
+}
+
+static void ai_chat_settings_select_callback(void* context, uint32_t index) {
+    AiChatApp* app = context;
+
+    if(index == AiChatSettingsServerUrl) {
+        strncpy(app->server_input_buffer, app->server_url, SERVER_URL_MAX_LEN - 1);
+        app->server_input_buffer[SERVER_URL_MAX_LEN - 1] = '\0';
+        text_input_set_header_text(app->server_input, "Server: http://host:port");
+        view_dispatcher_switch_to_view(app->view_dispatcher, AiChatViewServerInput);
+    } else if(index == AiChatSettingsRescanModels) {
+        ai_chat_uart_send_line(app->uart, "LISTMODELS");
+        ai_chat_chat_view_add_line(app->chat_view, "(rescanning models...)");
+        view_dispatcher_switch_to_view(app->view_dispatcher, AiChatViewChat);
+    }
+}
+
+static void ai_chat_open_settings(AiChatApp* app) {
+    submenu_reset(app->settings_submenu);
+    submenu_set_header(app->settings_submenu, "Settings");
+
+    FuriString* label = furi_string_alloc();
+    furi_string_printf(
+        label, "Server: %s", strlen(app->server_url) ? app->server_url : "(not set)");
+    submenu_add_item(
+        app->settings_submenu,
+        furi_string_get_cstr(label),
+        AiChatSettingsServerUrl,
+        ai_chat_settings_select_callback,
+        app);
+    furi_string_free(label);
+
+    submenu_add_item(
+        app->settings_submenu,
+        "Rescan models",
+        AiChatSettingsRescanModels,
+        ai_chat_settings_select_callback,
+        app);
+
+    view_dispatcher_switch_to_view(app->view_dispatcher, AiChatViewSettings);
+}
+
 static void ai_chat_view_event_callback(AiChatChatViewEvent event, void* context) {
     AiChatApp* app = context;
     switch(event) {
@@ -193,6 +310,9 @@ static void ai_chat_view_event_callback(AiChatChatViewEvent event, void* context
         break;
     case AiChatEventOpenModelSelect:
         ai_chat_open_model_select(app);
+        break;
+    case AiChatEventOpenSettings:
+        ai_chat_open_settings(app);
         break;
     case AiChatEventExit:
         app->running = false;
@@ -233,6 +353,25 @@ static AiChatApp* ai_chat_app_alloc(void) {
     view_dispatcher_add_view(
         app->view_dispatcher, AiChatViewModelSelect, submenu_get_view(app->model_submenu));
 
+    app->settings_submenu = submenu_alloc();
+    view_set_previous_callback(submenu_get_view(app->settings_submenu), ai_chat_exit_to_chat);
+    view_dispatcher_add_view(
+        app->view_dispatcher, AiChatViewSettings, submenu_get_view(app->settings_submenu));
+
+    app->server_input = text_input_alloc();
+    text_input_set_result_callback(
+        app->server_input,
+        ai_chat_server_input_result,
+        app,
+        app->server_input_buffer,
+        SERVER_URL_MAX_LEN,
+        true);
+    view_set_previous_callback(text_input_get_view(app->server_input), ai_chat_exit_to_settings);
+    view_dispatcher_add_view(
+        app->view_dispatcher, AiChatViewServerInput, text_input_get_view(app->server_input));
+
+    ai_chat_load_server_url(app);
+
     app->uart = ai_chat_uart_alloc(ai_chat_handle_uart_line, app);
     ai_chat_chat_view_add_line(app->chat_view, "Booting bridge link...");
     ai_chat_uart_send_line(app->uart, "LISTMODELS");
@@ -243,6 +382,12 @@ static AiChatApp* ai_chat_app_alloc(void) {
 
 static void ai_chat_app_free(AiChatApp* app) {
     ai_chat_uart_free(app->uart);
+
+    view_dispatcher_remove_view(app->view_dispatcher, AiChatViewServerInput);
+    text_input_free(app->server_input);
+
+    view_dispatcher_remove_view(app->view_dispatcher, AiChatViewSettings);
+    submenu_free(app->settings_submenu);
 
     view_dispatcher_remove_view(app->view_dispatcher, AiChatViewModelSelect);
     submenu_free(app->model_submenu);
