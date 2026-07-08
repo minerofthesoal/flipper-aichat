@@ -20,10 +20,12 @@ typedef struct {
     FuriString* model_name;
 } ChatViewModel;
 
-typedef struct {
-    AiChatChatViewEventCallback callback;
-    void* callback_context;
-} ChatViewContext;
+// There's only ever one chat view in this app, so plain statics are simpler
+// and just as safe as threading a context pointer through - the SDK has no
+// view_get_context() getter (only view_set_context()), so a context struct
+// retrieved that way isn't an option anyway.
+static AiChatChatViewEventCallback s_event_callback = NULL;
+static void* s_event_callback_context = NULL;
 
 static void chat_view_push_line(ChatViewModel* model, const char* text) {
     if(model->line_count == MAX_HISTORY_LINES) {
@@ -101,15 +103,15 @@ static void chat_view_draw_callback(Canvas* canvas, void* model_ptr) {
 
 static bool chat_view_input_callback(InputEvent* event, void* context) {
     View* view = context;
-    ChatViewContext* ctx = view_get_context(view);
     bool consumed = false;
 
     if(event->type == InputTypeShort || event->type == InputTypeRepeat) {
         if(event->key == InputKeyOk) {
-            if(ctx->callback) ctx->callback(AiChatEventOpenKeyboard, ctx->callback_context);
+            if(s_event_callback) s_event_callback(AiChatEventOpenKeyboard, s_event_callback_context);
             consumed = true;
         } else if(event->key == InputKeyLeft) {
-            if(ctx->callback) ctx->callback(AiChatEventOpenModelSelect, ctx->callback_context);
+            if(s_event_callback)
+                s_event_callback(AiChatEventOpenModelSelect, s_event_callback_context);
             consumed = true;
         } else if(event->key == InputKeyUp) {
             with_view_model(
@@ -125,7 +127,7 @@ static bool chat_view_input_callback(InputEvent* event, void* context) {
                 true);
             consumed = true;
         } else if(event->key == InputKeyBack) {
-            if(ctx->callback) ctx->callback(AiChatEventExit, ctx->callback_context);
+            if(s_event_callback) s_event_callback(AiChatEventExit, s_event_callback_context);
             consumed = true;
         }
     }
@@ -149,11 +151,6 @@ View* ai_chat_chat_view_alloc(void) {
         },
         true);
 
-    ChatViewContext* ctx = malloc(sizeof(ChatViewContext));
-    ctx->callback = NULL;
-    ctx->callback_context = NULL;
-    view_set_context(view, ctx);
-
     view_set_draw_callback(view, chat_view_draw_callback);
     view_set_input_callback(view, chat_view_input_callback);
     return view;
@@ -171,7 +168,6 @@ void ai_chat_chat_view_free(View* view) {
             furi_string_free(model->model_name);
         },
         false);
-    free(view_get_context(view));
     view_free(view);
 }
 
@@ -179,9 +175,9 @@ void ai_chat_chat_view_set_event_callback(
     View* view,
     AiChatChatViewEventCallback callback,
     void* context) {
-    ChatViewContext* ctx = view_get_context(view);
-    ctx->callback = callback;
-    ctx->callback_context = context;
+    UNUSED(view); // only one chat view exists in this app; see the statics above
+    s_event_callback = callback;
+    s_event_callback_context = context;
 }
 
 void ai_chat_chat_view_add_line(View* view, const char* text) {
