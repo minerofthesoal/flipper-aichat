@@ -10,7 +10,6 @@ extern "C" {
 typedef enum {
     AiChatEventOpenKeyboard, // OK pressed on chat view
     AiChatEventOpenModelSelect, // Left pressed on chat view
-    AiChatEventOpenSettings, // Right pressed on chat view
     AiChatEventExit, // Back pressed on chat view
 } AiChatChatViewEvent;
 

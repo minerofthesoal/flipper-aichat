@@ -1,0 +1,13 @@
+{
+  "name": "Flipper AI Chat - Devboard Bridge",
+  "version": "0.0.0-dev",
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S2",
+      "parts": [
+        { "path": "firmware.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

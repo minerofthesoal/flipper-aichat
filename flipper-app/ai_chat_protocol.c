@@ -51,9 +51,3 @@ FuriString* ai_chat_protocol_build_select_model(const char* name) {
     furi_string_printf(out, "SELMODEL|%s", name ? name : "");
     return out;
 }
-
-FuriString* ai_chat_protocol_build_set_server(const char* url) {
-    FuriString* out = furi_string_alloc();
-    furi_string_printf(out, "SETSERVER|%s", url ? url : "");
-    return out;
-}

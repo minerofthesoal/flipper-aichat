@@ -24,11 +24,24 @@ companion for direct testing and for provisioning the devboard.
 |-------------------|----------------------------------------------------------------------|
 | `flipper-app/`    | The `.fap` app: chat UI, on-demand keyboard, streaming, model select |
 | `esp32-bridge/`   | Firmware for the WiFi Devboard: UART <-> LM Studio HTTP bridge        |
+| `web-installer/`  | Browser-based flasher (ESP Web Tools + Improv Wi-Fi) - no PlatformIO or CLI needed to set up a devboard |
 | `linux-tui/`      | Textual TUI: direct LM Studio chat, or serial link to the devboard    |
 | `docs/PROTOCOL.md`| The Flipper<->devboard wire protocol                                  |
 | `docs/SETUP.md`   | Step-by-step setup (LM Studio, Tailscale, flashing, installing)       |
 | `docs/PHONE_RELAY.md` | Design + starter stub for the phone/BLE alternative transport     |
-| `.github/workflows/ci.yml` | One workflow: tests + builds both firmwares + tags a release |
+| `.github/workflows/ci.yml` | One workflow: tests + builds both firmwares + deploys the web installer + tags a release |
+
+## Web installer
+
+Push to `main` and CI publishes a self-contained flashing page to GitHub
+Pages (enable it once under **Settings > Pages > Source: GitHub Actions**).
+From there, flashing the devboard and setting up WiFi is just: plug it in,
+click a button, follow the prompts - powered by
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/) for the flash and
+[Improv Wi-Fi](https://www.improv-wifi.com/) for provisioning, both running
+entirely in the browser over Web Serial (Chrome/Edge desktop only). The page
+also has a small form to set your LM Studio address afterward, since Improv
+only carries WiFi credentials. See `docs/SETUP.md` for the full walkthrough.
 
 ## Flipper app UI
 
@@ -73,6 +86,16 @@ unmodified on both; CI builds against the official SDK channel via `ufbt`.
 - `esp32-bridge` uses the generic `esp32-s2-saola-1` PlatformIO board
   definition, which matches the Devboard's UART/WiFi well enough but doesn't
   model devboard-specific peripherals (unused here anyway).
+- The web installer's merged binary assumes the standard Arduino-ESP32
+  offsets (bootloader `0x1000`, partition table `0x8000`, app `0x10000`,
+  4MB flash, no OTA). If you change the partition scheme or flash size in
+  `platformio.ini`, update the `merge_bin` offsets in
+  `.github/workflows/ci.yml` to match.
+- Improv Wi-Fi and the app's own text protocol both use the same serial
+  port but can't run at once; the firmware gates between them on
+  `WiFi.status()` (see the comment block in `esp32-bridge/src/main.cpp`).
+  Practically: WiFi has to actually connect before the Flipper app's chat
+  protocol comes alive on that port.
 - SDK header drift: Flipper's SDK API shifts between firmware versions
   occasionally; if `ufbt build` complains about a renamed function, that's
   almost always a small rename in `furi_hal_serial.h` or the view API, not a

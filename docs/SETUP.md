@@ -41,21 +41,39 @@ supports a tailnet URL for exactly that).
 
 ## 3. Flash the ESP32 bridge firmware
 
+### Option A: Web installer (recommended)
+
+1. Go to `https://<your-github-username>.github.io/<repo-name>/` (published
+   automatically by the `deploy-web-installer` CI job on every push to
+   `main`). First time in this repo: enable it once under
+   **Settings > Pages > Source: GitHub Actions**, then push to `main`.
+2. Plug the WiFi Devboard into your computer over its own USB port (not
+   through the Flipper), in Chrome or Edge on desktop (Web Serial isn't
+   available elsewhere).
+3. Click **Connect**, pick the devboard's serial port, and follow the
+   install flow. It flashes the firmware, then walks you straight into
+   WiFi setup in the browser via Improv Wi-Fi - no serial monitor needed.
+4. Still on the page, enter your LM Studio address (see the Tailscale
+   section above) and click **Connect & send** to set it over serial.
+
+To reconfigure WiFi later on a board that's already flashed and running,
+either come back to the page and use the button's "Configure Wi-Fi" option,
+or send `REPROVISION` first (e.g. from the Linux TUI's Serial mode) so the
+device drops back into provisioning mode.
+
+### Option B: PlatformIO (for firmware development)
+
 ```
 cd esp32-bridge
 pio run -t upload -t monitor
 ```
 
-(Requires [PlatformIO](https://platformio.org/). Plug the Flipper's WiFi
-Devboard in via its own USB port, not through the Flipper.)
+First boot has no WiFi/server configured. Either use the web installer's
+Improv flow (Option A, steps 3-4) for WiFi + the LM Studio address, or send
+`SETWIFI|yourssid|yourpass` and `SETSERVER|http://192.168.1.x:1234` directly
+over the PlatformIO serial monitor, or from the Linux TUI's Serial mode.
 
-First boot has no WiFi/server configured. Either:
-- send `SETWIFI|yourssid|yourpass` and `SETSERVER|http://192.168.1.x:1234`
-  over the PlatformIO serial monitor, or
-- use the Linux TUI's Serial mode (`ai-chat-tui`, then Ctrl+M) to send the
-  same commands from a nicer UI.
-
-Config persists in NVS, so this is a one-time step per network.
+Config persists in NVS either way, so this is a one-time step per network.
 
 ## 4. Build and install the Flipper app
 

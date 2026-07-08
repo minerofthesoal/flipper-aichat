@@ -11,16 +11,9 @@ class LmStudioClient:
     TUI's Direct mode so you can test prompts/models against your home PC
     over Tailscale without a Flipper attached at all."""
 
-    def __init__(self, base_url: str, timeout: float = 60.0, connect_timeout: float = 5.0):
+    def __init__(self, base_url: str, timeout: float = 60.0):
         self.base_url = base_url.rstrip("/")
-        # A single shared timeout for everything is the wrong default here:
-        # a wrong/unreachable host (typo'd IP, VPN down, etc.) would then
-        # take just as long to fail as we're willing to wait for a slow
-        # model to *finish generating* - up to the full 60s, which from the
-        # UI just looks like a hang. Connect failures should surface fast;
-        # only the "waiting for tokens once connected" part needs to be
-        # generous.
-        self.timeout = httpx.Timeout(timeout, connect=connect_timeout)
+        self.timeout = timeout
 
     async def list_models(self) -> list[str]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:

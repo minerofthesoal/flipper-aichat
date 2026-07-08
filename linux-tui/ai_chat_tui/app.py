@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-import httpx
 from textual.app import App, ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Header,
@@ -77,14 +75,7 @@ class AiChatTuiApp(App):
     BINDINGS = [
         ("ctrl+m", "toggle_mode", "Toggle Direct/Serial"),
         ("ctrl+r", "refresh_models", "Refresh models"),
-        ("ctrl+u", "edit_server_url", "Set LM Studio host"),
         ("ctrl+q", "quit", "Quit"),
-        # Textual puts the terminal in raw mode, which disables the normal
-        # tty behavior where Ctrl+C sends SIGINT - without this, Ctrl+C just
-        # arrives as an ordinary keypress and does nothing, which looks like
-        # a hang to anyone (reasonably) expecting Ctrl+C to always work.
-        # Hidden from the footer so it doesn't duplicate the Ctrl+Q hint.
-        Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
     def __init__(self):
@@ -96,9 +87,6 @@ class AiChatTuiApp(App):
         self.lm_client = LmStudioClient(self.cfg.lmstudio_url)
         self.history: list[dict] = []
         self._streaming_task: asyncio.Task | None = None
-        self._stream_prefix = ""
-        self._stream_buffer = ""
-        self._stream_line_start = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -110,8 +98,7 @@ class AiChatTuiApp(App):
                 yield Select([], id="model-select", allow_blank=True)
                 yield Button("Refresh models", id="refresh-models")
                 yield Static("")
-                yield Static("LM Studio host (Ctrl+U, Enter to apply)")
-                yield Input(value=self.cfg.lmstudio_url, placeholder="http://host:port", id="server-url-input")
+                yield Static(f"LM Studio:\n{self.cfg.lmstudio_url}")
                 yield Static(f"Serial port:\n{self.cfg.serial_port}")
         with Horizontal(id="input-row"):
             yield Input(placeholder="Type a message and press Enter to send...", id="chat-input")
@@ -120,7 +107,7 @@ class AiChatTuiApp(App):
     async def on_mount(self) -> None:
         status = self.query_one(StatusBar)
         status.mode = self.mode
-        self.action_refresh_models()
+        await self.action_refresh_models()
         self.query_one("#chat-input", Input).focus()
 
     def action_toggle_mode(self) -> None:
@@ -153,16 +140,12 @@ class AiChatTuiApp(App):
         assert self.serial_link is not None
         log = self.query_one("#chat-log", RichLog)
         link = self.serial_link
-        streaming = False
         while self.mode == MODE_SERIAL and self.serial_link is link:
             msg = await link.queue.get()
             if msg.type == "token":
-                if not streaming:
-                    self._stream_start(log, "[b magenta]AI:[/] ")
-                    streaming = True
-                self._stream_append(log, msg.payload)
+                log.write(msg.payload, end="")
             elif msg.type == "done":
-                streaming = False
+                log.write("")
             elif msg.type == "error":
                 log.write(f"[red]{msg.payload}[/]")
             elif msg.type == "models":
@@ -173,77 +156,16 @@ class AiChatTuiApp(App):
             else:
                 log.write(f"[dim]{msg.payload}[/]")
 
-    def action_refresh_models(self) -> None:
-        # Always a worker, never a direct await from a message handler: a
-        # bad host used to hang the *button press itself* for up to the
-        # full 60s timeout, which is what looked like a freeze. Running it
-        # as an exclusive worker also means mashing Ctrl+R again (e.g.
-        # after fixing the host) cancels the stuck attempt and starts a
-        # fresh one immediately, instead of queueing behind it.
-        self.run_worker(self._refresh_models_worker(), exclusive=True, group="refresh")
-
-    async def _refresh_models_worker(self) -> None:
+    async def action_refresh_models(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        status = self.query_one(StatusBar)
         if self.mode == MODE_DIRECT:
-            status.connection = f"connecting to {self.cfg.lmstudio_url}..."
             try:
                 self.models = await self.lm_client.list_models()
                 self._refresh_model_select()
-                status.connection = "direct"
-            except httpx.ConnectError as e:
-                status.connection = "error"
-                log.write(
-                    f"[red]Could not reach LM Studio at {self.cfg.lmstudio_url} "
-                    f"({e}). Check the host in the sidebar (Ctrl+U) and press "
-                    f"Ctrl+R to retry.[/]"
-                )
-            except httpx.TimeoutException:
-                status.connection = "error"
-                log.write(
-                    f"[red]Timed out reaching LM Studio at {self.cfg.lmstudio_url}. "
-                    f"Check the host in the sidebar (Ctrl+U) and press Ctrl+R to retry.[/]"
-                )
             except Exception as e:  # noqa: BLE001
-                status.connection = "error"
                 log.write(f"[red]Could not reach LM Studio: {e}[/]")
         elif self.serial_link:
             self.serial_link.send("LISTMODELS")
-
-    def action_edit_server_url(self) -> None:
-        self.query_one("#server-url-input", Input).focus()
-
-    async def _apply_server_url(self, url: str) -> None:
-        log = self.query_one("#chat-log", RichLog)
-        field = self.query_one("#server-url-input", Input)
-        if not url:
-            log.write("[red]Server URL can't be empty.[/]")
-            field.value = self.cfg.lmstudio_url
-            return
-        self.cfg.lmstudio_url = url
-        self.cfg.save()
-        self.lm_client = LmStudioClient(url)
-        field.value = url
-        log.write(f"[green]LM Studio host set to {url}[/]")
-        if self.mode == MODE_DIRECT:
-            self.action_refresh_models()
-
-    def _stream_start(self, log: RichLog, prefix: str = "") -> None:
-        """Begin a new line in the chat log that will be updated in place as
-        tokens arrive. RichLog.write() has no print()-style `end` argument -
-        every call appends brand-new line(s) - so "streaming" has to work by
-        remembering where this line started and rewriting it whole each time.
-        """
-        self._stream_prefix = prefix
-        self._stream_buffer = ""
-        self._stream_line_start = len(log.lines)
-        log.write(prefix)
-
-    def _stream_append(self, log: RichLog, delta: str) -> None:
-        """Append `delta` to the in-progress streamed line."""
-        self._stream_buffer += delta
-        del log.lines[self._stream_line_start :]
-        log.write(f"{self._stream_prefix}{self._stream_buffer}")
 
     def _refresh_model_select(self) -> None:
         select = self.query_one("#model-select", Select)
@@ -254,7 +176,7 @@ class AiChatTuiApp(App):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "refresh-models":
-            self.action_refresh_models()
+            await self.action_refresh_models()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "model-select" and event.value != Select.BLANK:
@@ -264,10 +186,6 @@ class AiChatTuiApp(App):
                 self.serial_link.send_select_model(str(event.value))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "server-url-input":
-            await self._apply_server_url(event.value.strip())
-            return
-
         text = event.value.strip()
         if not text:
             return
@@ -283,7 +201,7 @@ class AiChatTuiApp(App):
             return
 
         self.history.append({"role": "user", "content": text})
-        self._stream_start(log, "[b magenta]AI:[/] ")
+        log.write("[b magenta]AI:[/] ", end="")
         self.run_worker(self._stream_direct(), exclusive=True, group="stream")
 
     async def _stream_direct(self) -> None:
@@ -293,10 +211,11 @@ class AiChatTuiApp(App):
         try:
             async for delta in self.lm_client.stream_chat(model, self.history):
                 reply += delta
-                self._stream_append(log, delta)
+                log.write(delta, end="")
         except Exception as e:  # noqa: BLE001
-            log.write(f"[red]Error: {e}[/]")
+            log.write(f"\n[red]Error: {e}[/]")
             return
+        log.write("")
         self.history.append({"role": "assistant", "content": reply})
 
     def on_unmount(self) -> None:

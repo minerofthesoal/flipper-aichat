@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flipper AI Chat — Devboard Installer</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+<style>
+  :root {
+    --bg: #0d0e12;
+    --panel: #16181f;
+    --border: #2a2d38;
+    --accent: #a855f7;
+    --accent-dim: #6b21a8;
+    --text: #e6e6ec;
+    --text-dim: #8a8d9a;
+    --ok: #4ade80;
+    --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1 {
+    font-size: 22px;
+    letter-spacing: 0.02em;
+    margin: 0 0 4px;
+    color: var(--text);
+  }
+  h1 span { color: var(--accent); }
+  .subtitle { color: var(--text-dim); margin: 0 0 32px; font-size: 14px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .card h2 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin: 0 0 6px;
+  }
+  .step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px; height: 20px;
+    border-radius: 4px;
+    background: var(--accent-dim);
+    color: #fff;
+    font-size: 12px;
+    margin-right: 8px;
+  }
+  .card p { color: var(--text-dim); font-size: 13px; margin: 6px 0 14px; }
+  esp-web-install-button {
+    --esp-tools-button-color: #fff;
+    --esp-tools-button-background-color: var(--accent);
+  }
+  input[type="text"] {
+    width: 100%;
+    background: #0a0b0e;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  button.action {
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button.action:hover { background: #9333ea; }
+  button.action:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+  .status-line {
+    font-size: 12px;
+    margin-top: 10px;
+    min-height: 16px;
+  }
+  .status-line.ok { color: var(--ok); }
+  .status-line.err { color: var(--err); }
+  a { color: var(--accent); }
+  code {
+    background: #0a0b0e;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .fallback {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 14px;
+    border-top: 1px dashed var(--border);
+    padding-top: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span>Flipper AI Chat</span> — Devboard Installer</h1>
+  <p class="subtitle">
+    Flashes the ESP32-S2 bridge firmware onto the Flipper Zero WiFi Devboard,
+    straight from this page. Chrome / Edge on desktop only (Web Serial).
+  </p>
+
+  <div class="card">
+    <h2><span class="step-num">1</span>Connect the devboard</h2>
+    <p>
+      Plug the WiFi Devboard into your computer over its own USB port
+      (not through the Flipper). Then click below and pick its serial
+      port when the browser prompts you.
+    </p>
+    <esp-web-install-button manifest="./manifest.json"></esp-web-install-button>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num">2</span>Configure WiFi</h2>
+    <p>
+      The install flow above walks you straight into WiFi setup after
+      flashing (powered by <a href="https://www.improv-wifi.com/" target="_blank" rel="noopener">Improv Wi-Fi</a>).
+      If you ever need to reconfigure WiFi on an already-flashed board later,
+      come back to this page, click the button above again, and choose
+      "Configure Wi-Fi" without reflashing — or send <code>REPROVISION</code>
+      from the Linux TUI's Serial mode first if the board is already running.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2><span class="step-num">3</span>Point it at LM Studio</h2>
+    <p>
+      Improv only carries WiFi credentials, so the LM Studio server address
+      is set separately, over the same serial port. Enter your PC's address
+      (LAN IP at home, e.g. <code>http://192.168.1.42:1234</code>, or a
+      Tailscale address — see <code>docs/SETUP.md</code>) and send it below.
+    </p>
+    <input type="text" id="server-url" placeholder="http://192.168.1.42:1234" />
+    <button class="action" id="send-server">Connect &amp; send</button>
+    <div class="status-line" id="server-status"></div>
+    <div class="fallback">
+      No Web Serial support, or prefer a terminal? The same thing works from
+      <code>ai-chat-tui</code>'s Serial mode, or any serial monitor at 115200
+      baud: send <code>SETSERVER|http://your-pc:1234</code>.
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  const sendBtn = document.getElementById("send-server");
+  const urlInput = document.getElementById("server-url");
+  const statusEl = document.getElementById("server-status");
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg;
+    statusEl.className = "status-line" + (kind ? " " + kind : "");
+  }
+
+  if (!("serial" in navigator)) {
+    sendBtn.disabled = true;
+    setStatus("Web Serial isn't available in this browser — use the fallback below.", "err");
+  }
+
+  sendBtn.addEventListener("click", async () => {
+    const url = urlInput.value.trim();
+    if (!url) {
+      setStatus("Enter a server URL first.", "err");
+      return;
+    }
+    sendBtn.disabled = true;
+    setStatus("Requesting serial port...");
+    try {
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+
+      const encoder = new TextEncoderStream();
+      const writableClosed = encoder.readable.pipeTo(port.writable);
+      const writer = encoder.writable.getWriter();
+
+      setStatus("Sending SETSERVER...");
+      await writer.write(`SETSERVER|${url}\n`);
+      await writer.close();
+      await writableClosed;
+      await port.close();
+
+      setStatus(`Sent. The bridge is now pointed at ${url}.`, "ok");
+    } catch (err) {
+      setStatus(`Failed: ${err.message || err}`, "err");
+    } finally {
+      sendBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
