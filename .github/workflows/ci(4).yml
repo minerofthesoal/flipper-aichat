@@ -1,0 +1,178 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp on this build (e.g. 1.2.3). Leave blank to auto-derive from the git ref (tag, or 0.0.0-dev+<sha>)."
+        required: false
+        default: ""
+
+jobs:
+  test-python:
+    name: Test - Linux TUI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package + test deps
+        run: |
+          cd linux-tui
+          pip install .
+          pip install pytest
+      - name: Run tests
+        run: |
+          cd linux-tui
+          pytest -v
+
+  build-flipper:
+    name: Build - Flipper app (.fap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with ufbt
+        id: build-app
+        uses: flipperdevices/flipperzero-ufbt-action@v0.1
+        with:
+          app-dir: flipper-app
+          sdk-channel: release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flipper-fap
+          path: ${{ steps.build-app.outputs.fap-artifacts }}
+
+  build-esp32:
+    name: Build - ESP32 devboard firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Determine firmware version
+        id: fw_version
+        run: |
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build firmware
+        env:
+          PLATFORMIO_BUILD_FLAGS: -D FIRMWARE_VERSION=\"${{ steps.fw_version.outputs.version }}\"
+        run: |
+          cd esp32-bridge
+          pio run
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware
+          path: esp32-bridge/.pio/build/esp32-s2-devboard/firmware.bin
+
+      - name: Merge into a single flashable image
+        id: merge
+        run: |
+          cd esp32-bridge
+          BUILD_DIR=.pio/build/esp32-s2-devboard
+          pio pkg exec -- esptool.py --chip esp32s2 merge_bin \
+            -o merged-firmware.bin \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            0x1000 "$BUILD_DIR/bootloader.bin" \
+            0x8000 "$BUILD_DIR/partitions.bin" \
+            0x10000 "$BUILD_DIR/firmware.bin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32-merged-firmware
+          path: esp32-bridge/merged-firmware.bin
+
+      - name: Assemble web installer site
+        run: |
+          mkdir -p site
+          cp web-installer/index.html site/index.html
+          cp esp32-bridge/merged-firmware.bin site/firmware.bin
+          cat > site/manifest.json <<EOF
+          {
+            "name": "Flipper AI Chat - Devboard Bridge",
+            "version": "${{ steps.fw_version.outputs.version }}",
+            "new_install_prompt_erase": false,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S2",
+                "parts": [
+                  { "path": "firmware.bin", "offset": 0 }
+                ]
+              }
+            ]
+          }
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-installer-site
+          path: site/
+
+  deploy-web-installer:
+    name: Deploy web installer to GitHub Pages
+    needs: build-esp32
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-installer-site
+          path: site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  release:
+    name: Create GitHub Release
+    needs: [test-python, build-flipper, build-esp32]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: flipper-fap
+          path: release/flipper
+      - uses: actions/download-artifact@v4
+        with:
+          name: esp32-firmware
+          path: release/esp32
+      - uses: actions/download-artifact@v4
+        with:
+          name: esp32-merged-firmware
+          path: release/esp32-merged
+      - name: Package Linux TUI source
+        run: |
+          tar -czf release/ai-chat-tui-src.tar.gz linux-tui
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/flipper/*.fap
+            release/esp32/firmware.bin
+            release/esp32-merged/merged-firmware.bin
+            release/ai-chat-tui-src.tar.gz
+          generate_release_notes: true
